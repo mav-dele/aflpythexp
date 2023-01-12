@@ -1,6 +1,6 @@
 ---
-title: "An application of Pythagorean Expectation to Australian Rules Football"
-output: github_document
+title: "Test"
+output: html_document
 ---
 
 ```{r setup, include=FALSE}
