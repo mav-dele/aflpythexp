@@ -1,5 +1,5 @@
 ---
-title: "Test"
+title: "Applying Pythagorean Expectation to Australian rules football"
 output: html_document
 ---
 
@@ -11,9 +11,9 @@ knitr::opts_chunk$set(echo = F,
 
 ## Background
 
-Pythagorean expectation (PE) is a sports analytics metric originally developed for baseball that evaluates and estimates the proportion or number of games a team "should" have won based on the number of "runs scored" relative to "runs allowed". In principle, PE allows us to analyse whether teams are "under" or "over"-performing relative to their actual record.
+Pythagorean expectation (PE) is a sports analytics metric originally developed for baseball that evaluates and estimates the proportion or number of games a team "should" have won based on their number of "runs scored" relative to "runs allowed". In principle, PE allows us to analyse whether teams are "under" or "over"-performing by comparing expected wins to actual wins. 
 
-The appeal of PE is in its relative simplicity, with the basic the basic expectation formula:
+The appeal of PE is in its relative simplicity, with the following formula:
 
 $$ 
 Win.percentage_{it}= \frac{points.scored_{it}^2}{points.scored_{it}^2+points.allowed_{it}^2}
@@ -21,15 +21,319 @@ $$
 
 where $i$ is a given team at season $t$. 
 
-This formula can simplified and generalised to the following, where $k$ is an optimal exponent (which tends to differ from sport-to-sport).
+This formula can simplified and generalised to the following, where $k$ is an optimal exponent which tends to differ from sport-to-sport.
 
 $$ 
 Win.percentage_{it} = \frac{1}{1+(\frac{points.allowed_{it}}{points.scored_{it}})^k} 
 $$
 
-PE has been applied to sports beyond baseball, including American Football, soccer and basketball, and empirically tends to be correlated with actual win percentage. With that in mind, we take a dive into PE in the Australian Rules Football (AFL) context and apply a simple implementation of the formula to gather insights, including: 
+PE has been applied to American Football, soccer and basketball, with Pythagorean expected win percentage tending to be correlated with actual win percentage. With that in mind, we take a dive into PE and how it might apply to the Australian Football League (AFL) context and apply a simple implementation of the formula.
+
+This analysis will primarily focus on the following:
 
 - Determining an optimal $k$ exponent for AFL;
 - The extent to which expected wins correlates with actual wins;
-- Understanding whether PE is useful in assessing the over or under-performance of teams, and 
-- How useful over/under-performance is as a predictor of next season performance.
+- Exploring whether concepts of over/under-performance can be used as a predictor of next season performance; and
+- Evaluating some of the outcomes of the 2022 AFL season. 
+
+## Preliminaries 
+
+We utilise AFL ladder data from "AFL tables" lovingly gathered and compiled by the `fitzroy` package. This contains ladder data/results as far back as 1897 up to the most recent complete season (2022) at the time of writing. While PE can be calculated at any stage of the season, for our analysis we focus on results at regular-seasons end. 
+
+```{r Preliminaries, message=FALSE, warning=FALSE, include=FALSE}
+rm(list = ls())
+
+library(tidyverse)
+library(Metrics)
+library(lmtest)
+library(fitzRoy)
+library(wesanderson)
+library(ggannotate)
+library(ggrepel)
+library(fst)
+library(modelsummary)
+library(margins)
+```
+
+```{r File paths - hidden for git, include=FALSE}
+project.path = "/Users/Maverick/Desktop/R projects/Pythagorean expectation"
+```
+
+```{r Load data, message=FALSE, warning=FALSE, include = FALSE}
+# ladder.raw = fetch_ladder_afltables(season = 1897:2022) %>% 
+#   rename_with(., .fn = tolower, .cols = everything()) 
+# 
+# write_fst(ladder.raw,
+#           file.path(project.path,
+#                     "raw_ladder_data.fst"))
+
+ladder.raw = dir(project.path,
+                 full.names = T, 
+                 pattern = "^raw") %>% 
+  read_fst()
+```
+
+```{r Define Pyth expectation formula, message=FALSE, warning=FALSE, include=FALSE}
+# Function for calculating Pythagorean expectation 
+# Default exponent based Matter of Stats analysis
+calc_pyth = function(points_scored, points_conceded, k=3.87){
+  return(1/(1+(points_conceded/points_scored)^k))
+}
+```
+
+```{r Breakdown wins, include = F}
+# As the ladder data doesn't contain a running total of wins/losses/draws, we calculate the number of wins manually based on the change in 'season.points' from round to round. 
+# Calculate the breakdown of wins, losses and draws
+ladder.tbl = ladder.raw %>%
+  group_by(season, team) %>%
+  # Calculate the change in points between rounds
+  mutate(change.pts = case_when(round.number == 1~season.points, # Round 1 points are teams current points
+                                TRUE~season.points-lag(season.points)),
+         # If change==4, team won.
+         result = case_when(change.pts == 4~1, # Win equals 4 points
+                            change.pts==0~0, # Loss equals 0 points
+                            TRUE~2), # Draw equals 2 points
+         actual.wins = sum(result),
+         #' AFL Tables does not include games played. We can't rely on the round number in season where there have been byes. 
+         #' Similarly, historically teams haven't necessarily played the same number of games in a season (see 1943 St Kilda VFL season).
+         #' As a work around, we check if a teams points for and against change in a given round changes, if not we consider them not to have 
+         #' played. 
+         change.aggregate.score = (score.for+score.against)-(lag(score.for)+lag(score.against)),
+         # If aggregate changes, we say they played. 
+         played.round = case_when(change.aggregate.score>0~1,
+                                  is.na(change.aggregate.score)&round.number==1~1,
+                                  change.aggregate.score==0~0),
+         # Sum this variable to get number of games played
+         games.played = sum(played.round)) %>%
+  # We only need the final round of the season for this purpose. 
+  filter(round.number == max(round.number)) %>%
+  ungroup() %>% 
+  # Drop helper variables
+  select(-change.aggregate.score, - played.round)
+```
+
+## Determining optimal exponent ($k$)
+
+In theory, the optimal value for $k$ is one that yields predictions closest to actual win percentage. In baseball, optimal values for $k$ have ranged anywhere between 1 and 2 depending on the source. Conversely, this number tends to be higher in basketball, somewhere closer to 15. This differential is said to reflect "chance" playing a greater role in baseball relatively to basketball.
+
+For determining an optimal value for AFL, we take a simple approach of looping/iterating through our data with different combinations of $k$ calculating expected win percentage for teams in every season back to 1897. We then assess the results for each iteration of $k$ against actual win percentage utilising mean absolute error (MAE) and root mean squared error (RMSE) to measure accuracy, selecting a value which minimises the error. 
+
+```{r Pythagorean k-tester, include=FALSE}
+# Pythagorean k-tester
+start.tester = Sys.time() # To assess time to run (can be long depending of start/finishing values)
+# Initialise a blank accuracy tibble
+accuracy.tbl = list()
+for(i in seq(1, 8, 0.01)){
+  # Create a test table that iterates over different values of k
+  test.tbl = ladder.tbl %>%
+    mutate(actual.win.pct = actual.wins/games.played,
+           pyth.win.pct = calc_pyth(score.for, score.against, k=i),
+           pyth.wins = pyth.win.pct*games.played,
+           win.diff = actual.wins - pyth.wins,
+           pyth.pred.ladder = pyth.wins*4)
+  
+  # Bind accuracy values 
+  accuracy.tbl = accuracy.tbl %>%
+    bind_rows(tibble(k = i,
+                     MAE = mae(test.tbl$actual.wins, test.tbl$pyth.wins),
+                     RMSE = rmse(test.tbl$actual.wins, test.tbl$pyth.wins)))
+}
+end.tester = Sys.time()
+end.tester-start.tester
+```
+
+We plot and extract the results of our runs reporting the MAE/RMSE. We see that a $k$ of 3.9 minimises the MAE, while 3.89 minimises the RMSE. For our analysis and simplicity we utilise $k=3.9$ (MAE is generally more interpretable, and both magnitudes are almost identical). 
+
+```{r Plot accuracy, message=FALSE, warning=FALSE}
+accuracy.tbl %>% 
+  pivot_longer(ends_with("e"),
+               names_to = "measure") %>% 
+  ggplot(aes(x = k, y = value, fill = measure))+
+  geom_col()+
+  #geom_line()+
+  facet_wrap(~measure)+
+  scale_fill_manual(values = wes_palette("GrandBudapest2"))+
+  labs(title = "Accuracy based on k-parameter",
+       y = "Accuracy",
+       x = "k-exponent")+
+  theme(legend.position = "none")
+```
+
+**Reported accuracy**
+```{r Output optimal k}
+# Output the optimal exponent
+optimal.k = accuracy.tbl %>% 
+  summarise(mae.k = k[MAE==min(MAE)],
+            rmse.k = k[RMSE==min(RMSE)]) %>% 
+  print()
+```
+
+## Expectation correlates with actual outcomes
+
+Having found our "optimal" $k$, we create a Pythagorean table with calculated expected wins and win percentage. The below table provides a snapshot of the 2022 season. 
+
+```{r Pyth table, echo=FALSE, message=FALSE, warning=FALSE}
+pyth.tbl = ladder.tbl %>% 
+  mutate(actual.win.pct = actual.wins/games.played,
+         pyth.win.pct = calc_pyth(score.for, score.against, k = optimal.k$mae.k),
+         pyth.wins = pyth.win.pct*games.played,
+         win.diff = actual.wins - pyth.wins,
+         win.pct.diff = actual.win.pct - pyth.win.pct,
+         pyth.ladder.pts = pyth.wins*4) %>% 
+  group_by(season) %>% 
+  mutate(pyth.ladder.position = dense_rank(desc(pyth.ladder.pts))) %>% 
+  ungroup() %>% 
+  mutate(ladder.diff = ladder.position-pyth.ladder.position)
+
+print(pyth.tbl %>% 
+        filter(season == 2022) %>% 
+        arrange(ladder.position) %>% 
+        select(team, ladder.position, actual.win.pct, pyth.win.pct, actual.wins, pyth.wins) %>% 
+        mutate(across(where(is.numeric), ~round(.x, 2))))
+```
+
+As a simple check, we run a basic linear model to assess the correlation between "expected (or Pythagorean) win percentage" and "actual win percentage", where expected-wins is our explanatory variable. Here there's a clear positive relationship, suggesting expected-wins explains 86 per cent of the the variation in actual-wins. 
+
+```{r Linear model, echo=FALSE} 
+summary(lm(actual.win.pct~pyth.win.pct, data = pyth.tbl)) 
+```
+
+This is confirmed by plotting the relationship between expected and actual win percentages.
+
+```{r Linear polot, echo = F, warning=FALSE, message=FALSE}
+pyth.tbl %>% 
+  ggplot(aes(x = pyth.win.pct, y = actual.win.pct, group = 1))+
+  geom_point(colour = wes_palettes$Darjeeling2[1])+
+  geom_smooth(method = "lm", colour = wes_palettes$Darjeeling2[2])+
+  geom_abline(intercept = 0, slope = 1, size = 1, colour = "dark grey", linetype = "dashed")+
+  scale_y_continuous(limits = c(0, 1))+
+  scale_x_continuous(limits = c(0,1))+
+  labs(title = "Actual wins and Pythagorean expected win percentage",
+       x = "Expected win percentage",
+       y = "Actual win percentage", 
+       caption = "Dashed line is a 45 degree line.")
+```
+
+For completeness we also plot the residuals. 
+
+```{r Plot residuals, echo =FALSE, warning=FALSE, message=FALSE}
+pyth.tbl %>% 
+  mutate(residual = pyth.win.pct-actual.win.pct) %>% 
+  ggplot(aes(x = season, y = residual))+
+  geom_point(colour = wes_palettes$Darjeeling2[1])+
+  geom_smooth(method = "lm", colour = wes_palettes$Darjeeling2[2], se = F)+
+  #geom_hline(yintercept = 0, colour = "black", linetype = "dashed")+
+  labs(title = "Residuals plot",
+       y = "Residuals",
+       x = "Season")
+```
+
+## Relationship between win-differential and next season performance
+
+In isolation we can view the differential between a team's expected win percentage and actual win percentage as an assessment of whether they are under, over, or performing as expected. Here, under-performance refers to a situation where a team's actual wins is below its expected wins, with the converse suggesting over-performance. Some may extrapolate from this (whether sensibly or not), that under-performance in a given season might lead to a stronger performance the following season. This obviously fails to account for the plethora of reasons a team's performance might improve/deteriorate season-to-season, but holding all other factors fixed, is an intuitive proposition. 
+
+As a starting point, we plot a histogram of win-differentials (i.e. if actual wins are above expected meaning a team over-performs so to speak, this value will be positive). We notice on average, the win-differential is close to zero, consistent with the correlation between Pythagorean expected outcomes and actuals. 
+
+```{r Hist win differential, echo = F, message = F}
+pyth.tbl %>% 
+  ggplot(aes(x = win.diff))+
+  geom_histogram(aes(y = ..density..), 
+                 fill = wes_palettes$Darjeeling2[1])+
+  geom_density(colour = wes_palettes$Darjeeling2[2])+
+  geom_vline(aes(xintercept = mean(win.pct.diff)), colour = "grey", linetype = "dashed")+
+  labs(title = "Histogram of difference in actual to expected wins",
+       x = "Win percentage-differential",
+       y = "Density")
+```
+
+### To what extent does win-differential affect performance in the next season?
+
+A natural way to think about whether win-differential impacts a team's performance in the next season is assessing whether the probability of improvement (or regression) is affected by the differential. In this context, improvement can be defined a variety of ways:
+
+* Did the team improve the number of games it won or its win percentage?
+* Did the team improve its ladder position?
+* Did the team make finals?
+
+While the first improvement metric is the most straightforward, the latter two are perhaps more "meaningful" improvements. In practice, an improvement in win percentage is arguably meaningless if it doesn't yield any other outcomes. However, measuring improvement in ladder position is more complex and dependent on not only a team's performance, but also the performance of the rest of the league. A finals measure of performance is more complex again, so we can consider this question separately altogether (we shouldn't necessarily expect a team that finished last to make the finals in the next season, but maybe teams that greatly under-performed just outside the eight should?). 
+
+#### An aside about wins vs win-percentage
+
+Note that we can evaluate win-differential in two ways:
+
+- In terms of the number of wins (which is calculated by multiplying the number of games a team will play in a season by expected win percentage); or
+- Difference in win-percentage.
+
+The number of wins is arguably a more tangible/measurable unit of performance than percentage (i.e. a 0.025 ppt increase in win percentage is less meaningful). In effect "win-differential" and "win-percentage-differential" capture the same movements and are collinear with the former a function of the latter. However, we do need to be mindful the number of games each season is not necessarily static, number of games played can change from year-to-year (think 2020 COVID-19 disrupted season - however, with the exception of COVID, the number of games from season-to-season does not change significantly?). While the relative measure of win-percentage-differential is more suitable, where possible we will try to frame our results with the more tangible win-differential (noting the narrative does not change utilising one measure over the other). 
+
+### Win differential and performance change
+
+As a first pass we look at how under/over-performance (as measured by win-differential) in a given season $t$ impacts performance in the next season ($t+1$). 
+
+```{r Performance change table, include=FALSE}
+performance.change.tbl = pyth.tbl %>% 
+  arrange(season, team) %>% 
+  group_by(team) %>% 
+  mutate(next.ladder.position = lead(ladder.position),
+         ladder.change = ladder.position-next.ladder.position, # Positive equals ladder improvement
+         next.wins = lead(actual.wins),
+         wins.change = next.wins-actual.wins,
+         next.win.pct = lead(actual.win.pct), # Positive equals more wins next year
+         win.pct.change = next.win.pct-actual.win.pct) %>% 
+  ungroup() %>% 
+  drop_na() %>% 
+  mutate(improver.wins = case_when(wins.change<=0~0, # Same deteriorated
+                           TRUE~1),
+         improver.ladder = case_when(ladder.change<=0~0, 
+                                     TRUE~1)) # Improved
+```
+
+We plot team win-differential in season $t$ against the change in wins in $t+1$ (i.e. if a team wins more games in $t+1$ this number will be greater than zero). The position of a team in a given quadrant reflects whether they under/over-performed and whether they "improved" in terms of number of wins in the next season. For example, points in quadrant one (top-left) reflects teams that under-performed, but improved by increasing the number of wins in the next season. Conversely, points in the fourth quadrant (bottom-right) over-performed and then proceeded to deteriorate the next season. 
+
+Notably, there appears to be a negative relationship between win-differential and next season performance (as opposed to just random-noise), consistent with our priori.
+
+```{r Win differential change in wins plot, echo = F, message = F}
+performance.change.tbl %>% 
+  ggplot(aes(x = win.diff, y = wins.change))+
+  geom_point(colour = wes_palettes$Darjeeling2[1])+
+  geom_smooth(method = "lm", colour = wes_palettes$Darjeeling2[2])+
+  geom_vline(xintercept = 0, colour = "grey", linetype = "dashed")+
+  geom_hline(yintercept = 0, colour = "grey", linetype = "dashed")+
+  scale_x_continuous(limits = c(-6, 6))+
+  scale_y_continuous(limits = c(-15,15))+
+  labs(title = "Win differential and next season performance (change in wins)",
+       y = "Change in number of wins in next season",
+       x = "Win differential")+
+  #' Use `ggannotate`
+  geom_text(data = data.frame(x = c(-6, 2.25, -6, 2.25),
+                              y = c(15, 15, -15, -15),
+                              label = c("Under-performed, improved next year",
+                                        "Over-performed, improved next year",
+                                        "Under-performed, deteriorated next year",
+                                        "Over-performed, deteriorated next year")),
+            mapping = aes(x = x, y = y, label = label),
+            size = 2.5, hjust = 0L, inherit.aes = FALSE)
+```
+
+We can plot a similar plot but measuring performance change based on change to ladder position. We observe a similar negative relationship. 
+
+```{r Win differential change in ladder plot, echo = F, message = F}
+performance.change.tbl %>% 
+  ggplot(aes(x = win.diff, y = ladder.change))+
+  geom_point(colour = wes_palettes$Darjeeling2[1])+
+  geom_smooth(method = "lm", colour = wes_palettes$Darjeeling2[2])+
+  geom_vline(xintercept = 0, colour = "grey", linetype = "dashed")+
+  geom_hline(yintercept = 0, colour = "grey", linetype = "dashed")+
+  scale_x_continuous(limits = c(-6, 6))+
+  labs(title = "Win differential and next season performance (ladder position)",
+       y = "Change in ladder position in next season",
+       x = "Win differential")+
+  #' Use `ggannotate`
+  geom_text(data = data.frame(x = c(-6, 2.25, -6, 2.25),
+                              y = c(15, 15, -15, -15),
+                              label = c("Under-performed, improved next year", 
+                                        "Over-performed, improved next year", 
+                                        "Under-performed, deteriorated next year", 
+                                        "Over-performed, deteriorated next year")),
+            mapping = aes(x = x, y = y, label = label),
+            size = 2.5, hjust = 0L, inherit.aes = FALSE)
+```
