@@ -152,11 +152,16 @@ The plot below illustrates the calculated MAE/RMSE for values of $k$ tested. We 
 accuracy.tbl %>% 
   pivot_longer(ends_with("e"),
                names_to = "measure") %>% 
-  ggplot(aes(x = k, y = value, fill = measure))+
-  geom_col()+
+  ggplot(aes(x = k, y = value, 
+             #fill = measure,
+             colour = measure
+             ))+
+  #geom_col()+
   #geom_line()+
+  geom_point(size = 0.1)+
   facet_wrap(~measure)+
-  scale_fill_manual(values = wes_palette("GrandBudapest2"))+
+  #scale_fill_manual(values = wes_palette("GrandBudapest2"))+
+  scale_colour_manual(values = wes_palette("GrandBudapest2"))+
   labs(title = "Accuracy based on k-parameter",
        y = "Accuracy",
        x = "k-exponent")+
