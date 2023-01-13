@@ -53,6 +53,10 @@ library(ggrepel)
 library(fst)
 library(modelsummary)
 library(margins)
+library(knitr)
+library(kableExtra)
+library(texreg)
+library(stargazer)
 ```
 
 ```{r File paths - hidden for git, include=FALSE}
@@ -159,23 +163,24 @@ accuracy.tbl %>%
   theme(legend.position = "none")
 ```
 
-**Reported accuracy**
-```{r Output optimal k}
+```{r Output optimal k, echo = F}
 # Output the optimal exponent
 optimal.k = accuracy.tbl %>% 
-  summarise(mae.k = k[MAE==min(MAE)],
-            rmse.k = k[RMSE==min(RMSE)]) %>% 
-  print()
+  summarise("Mean absolute error" = k[MAE==min(MAE)],
+            "Root mean squared error" = k[RMSE==min(RMSE)])
+
+kableExtra::kbl(optimal.k,caption = "Exponent accuracy table") %>% 
+  kable_styling()
 ```
 
-## When expectation is reality (actuals)
+## Expectation is reality (actuals)
 
-Having found our "optimal" $k$, we create a Pythagorean table and calculate expected wins and win percentage. The below table provides a snapshot of the 2022 season. 
+Having found our "optimal" $k$, we create a Pythagorean table and calculate expected wins and win percentage. The below table provides a snapshot of the 2022 season displaying our calculated Pythagorean or expected wins and win percentage. 
 
 ```{r Pyth table, echo=FALSE, message=FALSE, warning=FALSE}
 pyth.tbl = ladder.tbl %>% 
   mutate(actual.win.pct = actual.wins/games.played,
-         pyth.win.pct = calc_pyth(score.for, score.against, k = optimal.k$mae.k),
+         pyth.win.pct = calc_pyth(score.for, score.against, k = optimal.k$`Mean absolute error`),
          pyth.wins = pyth.win.pct*games.played,
          win.diff = actual.wins - pyth.wins,
          win.pct.diff = actual.win.pct - pyth.win.pct,
@@ -185,20 +190,24 @@ pyth.tbl = ladder.tbl %>%
   ungroup() %>% 
   mutate(ladder.diff = ladder.position-pyth.ladder.position)
 
-kable(pyth.tbl %>% 
+kbl(pyth.tbl %>% 
         filter(season == 2022) %>% 
         arrange(ladder.position) %>% 
         select(team, ladder.position, actual.win.pct, pyth.win.pct, actual.wins, pyth.wins) %>% 
-        mutate(across(where(is.numeric), ~round(.x, 2))))
+        mutate(across(where(is.numeric), ~round(.x, 2))),
+    caption = "Pythagorean table, 2022") %>% 
+  kable_styling()
 ```
 
-As a simple check, we run a basic linear model to assess the correlation between "expected (or Pythagorean) win percentage" and "actual win percentage", where expected-wins is our explanatory variable. Here there's a clear positive relationship, suggesting expected-wins explains 86 per cent of the the variation in actual-wins. 
+As a simple check to assess how well expected wins correlates with actual wins, we run a basic linear model. Here there's a clear positive relationship, suggesting expected-wins explains 86 per cent of the the variation in actual-wins. 
 
-```{r Linear model, echo=FALSE} 
-summary(lm(actual.win.pct~pyth.win.pct, data = pyth.tbl)) 
+```{r Linear model, echo=FALSE, results ='asis'} 
+pyth.lm = lm(actual.win.pct~pyth.win.pct, data = pyth.tbl)
+#stargazer::stargazer(list(pyth.lm), type = "html", title = "stargazer table")
+texreg::htmlreg(list(pyth.lm), doctype = F,caption = "PE linear model")
 ```
 
-This is confirmed by plotting the relationship between expected and actual win percentages.
+We can show this relationship visually by plotting expected win percentage against actual win percentage.
 
 ```{r Linear polot, echo = F, warning=FALSE, message=FALSE}
 pyth.tbl %>% 
@@ -208,7 +217,7 @@ pyth.tbl %>%
   geom_abline(intercept = 0, slope = 1, size = 1, colour = "dark grey", linetype = "dashed")+
   scale_y_continuous(limits = c(0, 1))+
   scale_x_continuous(limits = c(0,1))+
-  labs(title = "Actual wins and Pythagorean expected win percentage",
+  labs(title = "A clear positive correlation between expected and actual win percentage",
        x = "Expected win percentage",
        y = "Actual win percentage", 
        caption = "Dashed line is a 45 degree line.")
@@ -221,16 +230,17 @@ pyth.tbl %>%
   mutate(residual = pyth.win.pct-actual.win.pct) %>% 
   ggplot(aes(x = season, y = residual))+
   geom_point(colour = wes_palettes$Darjeeling2[1])+
-  geom_smooth(method = "lm", colour = wes_palettes$Darjeeling2[2], se = F)+
+  #geom_smooth(method = "lm", colour = wes_palettes$Darjeeling2[2], se = F)+
+  geom_hline(yintercept = 0, colour = wes_palettes$Darjeeling2[2], linetype = "dashed")+
   #geom_hline(yintercept = 0, colour = "black", linetype = "dashed")+
   labs(title = "Residuals plot",
        y = "Residuals",
        x = "Season")
 ```
 
-## Relationship between win-differential and next season performance
+## Win-differential a predictor for next-season performance?
 
-In isolation we can view the differential between a team's expected win percentage and actual win percentage as an assessment of whether they are under, over, or performing as expected. Here, under-performance refers to a situation where a team's actual wins is below its expected wins, with the converse suggesting over-performance. Some may extrapolate from this (whether sensibly or not), that under-performance in a given season might lead to a stronger performance the following season. This obviously fails to account for the plethora of reasons a team's performance might improve/deteriorate season-to-season, but holding all other factors fixed, is an intuitive proposition. 
+In isolation we can view the differential between a team's expected win percentage and actual win percentage as an assessment of whether they are under, over, or performing as expected. Here, under-performance refers to a situation where a team's actual wins is below its expected wins (negative win-differential). Conversely, a team is said to over perform if its actual wins exceed expected wins (positive win-differential). Some may extrapolate from this (whether sensibly or not), that under-performance in a given season might lead to a stronger performance the following season. This obviously fails to account for the plethora of reasons a team's performance might improve/deteriorate season-to-season, but holding all other factors fixed, is a somewhat intuitive proposition. 
 
 As a starting point, we plot a histogram of win-differentials (i.e. if actual wins are above expected meaning a team over-performs so to speak, this value will be positive). We notice on average, the win-differential is close to zero, consistent with the correlation between Pythagorean expected outcomes and actuals. 
 
@@ -240,30 +250,27 @@ pyth.tbl %>%
   geom_histogram(aes(y = ..density..), 
                  fill = wes_palettes$Darjeeling2[1])+
   geom_density(colour = wes_palettes$Darjeeling2[2])+
-  geom_vline(aes(xintercept = mean(win.pct.diff)), colour = "grey", linetype = "dashed")+
+  geom_vline(aes(xintercept = mean(win.diff)), colour = "grey", linetype = "dashed")+
   labs(title = "Histogram of difference in actual to expected wins",
-       x = "Win percentage-differential",
+       x = "Win differential",
        y = "Density")
 ```
 
 ### To what extent does win-differential affect performance in the next season?
 
-A natural way to think about whether win-differential impacts a team's performance in the next season is assessing whether the probability of improvement (or regression) is affected by the differential. In this context, improvement can be defined a variety of ways:
+A natural way to think about whether win-differential impacts a team's performance in the next season is assessing whether the probability of improvement (or deterioration) is affected by win-differential. In this context, improvement could be defined a variety of ways:
 
 * Did the team improve the number of games it won or its win percentage?
 * Did the team improve its ladder position?
 * Did the team make finals?
 
-While the first improvement metric is the most straightforward, the latter two are perhaps more "meaningful" improvements. In practice, an improvement in win percentage is arguably meaningless if it doesn't yield any other outcomes. However, measuring improvement in ladder position is more complex and dependent on not only a team's performance, but also the performance of the rest of the league. A finals measure of performance is more complex again, so we can consider this question separately altogether (we shouldn't necessarily expect a team that finished last to make the finals in the next season, but maybe teams that greatly under-performed just outside the eight should?). 
+While the first improvement metric is the most straightforward, the latter two are perhaps more "meaningful" improvements. In practice, an improvement in win percentage is arguably meaningless if it doesn't yield any other outcomes. However, measuring improvement in ladder position is more complex and dependent on not only a team's performance, but also the performance of the rest of the league. A "team-made-finals" measure of performance is more meaningful/singificant, but again is more complex. Improvement to make finals is more scenario specific (i.e. a team that finishes last in a given season but under-performed aren't realistically expected to make finals, compared to a team that finished ninth). Given we want to focus on general improvement, we analyse improvement through the lens of improving number of wins/win-percentage and ladder position. 
 
 #### An aside about wins vs win-percentage
 
-Note that we can evaluate win-differential in two ways:
+Thus far we have perhaps erroneously used the terms wins/win-percentage and win-differential/win-percentage-differential fairly interchangably, but acknowledge that while both concepts are fairly similar and related, there is some nuance between the two. 
 
-- In terms of the number of wins (which is calculated by multiplying the number of games a team will play in a season by expected win percentage); or
-- Difference in win-percentage.
-
-The number of wins is arguably a more tangible/measurable unit of performance than percentage (i.e. a 0.025 ppt increase in win percentage is less meaningful). In effect "win-differential" and "win-percentage-differential" capture the same movements and are collinear with the former a function of the latter. However, we do need to be mindful the number of games each season is not necessarily static, number of games played can change from year-to-year (think 2020 COVID-19 disrupted season - however, with the exception of COVID, the number of games from season-to-season does not change significantly?). While the relative measure of win-percentage-differential is more suitable, where possible we will try to frame our results with the more tangible win-differential (noting the narrative does not change utilising one measure over the other). 
+The number of wins is arguably a more tangible/measurable unit of performance than percentage (i.e. a 0.025 ppt increase in win percentage is less meaningful than saying a team won $X$ more games). In effect "win-differential" and "win-percentage-differential" capture the same movements and are collinear. However, we do need to be mindful the number of games each season is not necessarily static, the number of games played in a season have historically increased, although the number of games player from one season to another stays reasonably similar (with the exception of COVID). While the relative measure of win-percentage-differential is probably more suitable, where possible we will try to frame our results with the more tangible win-differential (noting for robustness both measures are tested, with no change to the overall narrative). 
 
 ### Win differential and performance change
 
@@ -289,7 +296,7 @@ performance.change.tbl = pyth.tbl %>%
 
 We plot team win-differential in season $t$ against the change in wins in $t+1$ (i.e. if a team wins more games in $t+1$ this number will be greater than zero). The position of a team in a given quadrant reflects whether they under/over-performed and whether they "improved" in terms of number of wins in the next season. For example, points in quadrant one (top-left) reflects teams that under-performed, but improved by increasing the number of wins in the next season. Conversely, points in the fourth quadrant (bottom-right) over-performed and then proceeded to deteriorate the next season. 
 
-Notably, there appears to be a negative relationship between win-differential and next season performance (as opposed to just random-noise), consistent with our priori.
+When we apply a line of best fit to all of this historical data, we see an apparent inverse relationship between win-differential and next-season performance, consistent with our priori. 
 
 ```{r Win differential change in wins plot, echo = F, message = F}
 performance.change.tbl %>% 
@@ -300,7 +307,7 @@ performance.change.tbl %>%
   geom_hline(yintercept = 0, colour = "grey", linetype = "dashed")+
   scale_x_continuous(limits = c(-6, 6))+
   scale_y_continuous(limits = c(-15,15))+
-  labs(title = "Win differential and next season performance (change in wins)",
+  labs(title = "Under-performing teams tend to improve in number of wins the following season",
        y = "Change in number of wins in next season",
        x = "Win differential")+
   #' Use `ggannotate`
@@ -314,7 +321,7 @@ performance.change.tbl %>%
             size = 2.5, hjust = 0L, inherit.aes = FALSE)
 ```
 
-We can plot a similar plot but measuring performance change based on change to ladder position. We observe a similar negative relationship. 
+We produce a similar plot but replace performance change to change in ladder position. Again we observe an apparent negative relationship.
 
 ```{r Win differential change in ladder plot, echo = F, message = F}
 performance.change.tbl %>% 
@@ -324,7 +331,7 @@ performance.change.tbl %>%
   geom_vline(xintercept = 0, colour = "grey", linetype = "dashed")+
   geom_hline(yintercept = 0, colour = "grey", linetype = "dashed")+
   scale_x_continuous(limits = c(-6, 6))+
-  labs(title = "Win differential and next season performance (ladder position)",
+  labs(title = "Under-performing teams tend to improve ladder position the following season",
        y = "Change in ladder position in next season",
        x = "Win differential")+
   #' Use `ggannotate`
@@ -337,3 +344,101 @@ performance.change.tbl %>%
             mapping = aes(x = x, y = y, label = label),
             size = 2.5, hjust = 0L, inherit.aes = FALSE)
 ```
+
+### Modelling probability of improvement based on win-differential
+
+A relatively simple way of evaluating the extent to which win-differential might affect the probability a team improves in the next season would be to utilise a **logistic (logit)** regression.
+
+#### Improvement in wins
+
+We test two logit model specifications where we measure improvement based on change in wins:
+
+- **(Model 1)** A simple single variable model where win-differential is the only predictor; and
+- **(Model 2)** A multivariate logit where we include a team's ladder position and team name as a dummy. Intuitively, a team's previous finishing position may influence their level of improvement, for example, a team on the fringe of making finals may be more likely to perform better if they under-performed. Including a team dummy may capture any inherent characteristic a team might have (but we _shouldn't_ expect this to happen). 
+
+Our outcome variable, "improvement", is equal 1 if a team improves (increases its number of wins) in the next season, or 0 otherwise. Our prediction variable is win-differential.  
+
+Both models suggest win-differential has a statistically significant negative effect on the probability of team improving (based on wins) in the next season. To re-iterate, this means if at team over-performs as measured by having more actual wins than expected wins, they are less likely to improve in the following season and vice versa. 
+
+Calculating marginal effects suggest increasing win-differential by one game reduces the probability of improvement by around 10 per cent using the simple model or around 7.4 per cent based on the multivariate specification. It is also interesting to note the Gold Coast Suns dummy is negative and significant at the 5 per cent level, which may capture their underlying poor performance since entering the league. 
+
+```{r Simple logit, echo = F, message = F, results='asis'}
+simple.logit.tbl = performance.change.tbl %>% 
+  select(win.diff, improver.wins)
+
+simple.logit.model = glm(improver.wins~win.diff,
+                   family = binomial(link = "logit"),
+                   data = simple.logit.tbl)
+simple.logit.model.coef = coeftest(simple.logit.model)
+
+multiple.logit.model = glm(improver.wins~win.diff+ladder.position+team,
+                           family = binomial(link = "logit"),
+                           data = performance.change.tbl)
+multiple.logit.model.coef = coeftest(multiple.logit.model)
+
+texreg::htmlreg(list(simple.logit.model.coef, multiple.logit.model.coef), doctype = "html", caption = "Logit results - improvement measured by change in wins", caption.above = T)
+
+# simple.logit.model %>% 
+#         margins(variables = "win.diff")
+# 
+# multiple.logit.model %>% 
+#         margins(variables = "win.diff")
+```
+
+We can also visualise these results by plotting the predicted probability of improvement given a certain win-differential and fitting a binomial fitted line.
+
+```{r Siple logit, echo = F, message = F}
+simple.logit.tbl %>% 
+  ggplot(aes(y = improver.wins, x = win.diff))+
+  geom_point(colour = wes_palettes$Darjeeling2[1])+
+  geom_smooth(method = "glm", method.args = list(family = "binomial"),
+              colour = wes_palettes$Darjeeling2[2])+
+  labs(title = "Win differential and probability of improvement",
+       x = "Win differential",
+       y = "Team improved next season")
+```
+
+#### Improvement in ladder position
+
+We undertake a similar analysis with similar specifications but instead measure improvement in terms of change in ladder position. Both logit specifications yield similar statistically significant negative results. Calculating marginal effects, based on our simple model an increase in win-differential by one-game reduces the probability of improvement by around 7 per cent, with our multivariate specification suggesting a reduced probability closer to 4 per cent. This is consistent with the idea there are likely more factors affecting ladder position, in particular the relative performance of other team. 
+
+```{r Logit ladder, echo = F, message = F, results='asis'}
+simple.logit.ladder.tbl = performance.change.tbl %>% 
+  select(win.diff, improver.ladder)
+
+simple.logit.ladder.model = glm(improver.ladder~win.diff,
+                   family = binomial(link = "logit"),
+                   data = simple.logit.ladder.tbl)
+simple.logit.ladder.model.coef = coeftest(simple.logit.ladder.model)
+
+multi.logit.ladder.model = glm(improver.ladder~win.diff+ladder.position+team,
+                   family = binomial(link = "logit"),
+                   data = performance.change.tbl)
+multi.logit.ladder.model.coef = coeftest(multi.logit.ladder.model)
+
+texreg::htmlreg(list(simple.logit.ladder.model.coef, multi.logit.ladder.model.coef), doctype = "html", caption = "Logit results - improvement measured by change in ladder position", caption.above = T)
+
+# simple.logit.ladder.model %>% 
+#   margins(variables = "win.diff") 
+# 
+# multi.logit.ladder.model %>% 
+#   margins(variables = "win.diff") 
+
+```
+
+The predicted probability distribution is also flatter, consistent with these results. 
+
+```{r Logit ladder chat, echo = F, message = F}
+simple.logit.ladder.tbl %>% 
+  ggplot(aes(y = improver.ladder, x = win.diff))+
+  geom_point(colour = wes_palettes$Darjeeling2[1])+
+  geom_smooth(method = "glm", method.args = list(family = "binomial"),
+              colour = wes_palettes$Darjeeling2[2])+
+  labs(title = "Win differential and probability of improvement (ladder edition)",
+       x = "Win differential",
+       y = "Team improved next season")
+```
+
+## An analysis of the 2022 season
+
+Finally, we review the 2022 season through the lens of PE. As many pundits had assessed, Collingwood significantly over-performed, with an estimated 4 more wins than expected. Conversely, Port Adelaide strongly underperformed with 3 less wins than expected. 
