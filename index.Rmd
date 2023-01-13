@@ -11,9 +11,9 @@ knitr::opts_chunk$set(echo = F,
 
 ## Background
 
-Pythagorean expectation (PE) is a sports analytics metric originally developed for baseball that evaluates and estimates the proportion or number of games a team "should" have won based on their number of "runs scored" relative to "runs allowed". In principle, PE allows us to analyse whether teams are "under" or "over"-performing by comparing expected wins to actual wins. 
+Pythagorean expectation (PE) is a sports analytics metric originally developed for baseball that estimates the proportion or number of games a team is "expected" to have won as a function of points scored relative to points scored against. In principle, PE allows us to evaluate whether a team is or has under or over-performed when comparing Pyhthagorean expected wins (or expected wins for short) against the number of games the has actually won (actual wins).
 
-The appeal of PE is in its relative simplicity, with the following formula:
+The appeal of PE is in its relative simplicity as expressed with the following formula:
 
 $$ 
 Win.percentage_{it}= \frac{points.scored_{it}^2}{points.scored_{it}^2+points.allowed_{it}^2}
@@ -34,11 +34,11 @@ This analysis will primarily focus on the following:
 - Determining an optimal $k$ exponent for AFL;
 - The extent to which expected wins correlates with actual wins;
 - Exploring whether concepts of over/under-performance can be used as a predictor of next season performance; and
-- Evaluating some of the outcomes of the 2022 AFL season. 
+- Evaluating how the 2022 season played out when viewed from a PE lens. 
 
 ## Preliminaries 
 
-We utilise AFL ladder data from "AFL tables" lovingly gathered and compiled by the `fitzroy` package. This contains ladder data/results as far back as 1897 up to the most recent complete season (2022) at the time of writing. While PE can be calculated at any stage of the season, for our analysis we focus on results at regular-seasons end. 
+This analysis relies on AFL ladder data from "AFL tables" which has lovingly been gathered and compiled in the `fitzroy` package. This contains ladder data/results dating back to 1897 and is current to the most recent completed season (2022) at the time of writing. While PE can be calculated at any stage of the season, for our analysis we focus on results at regular-season end. 
 
 ```{r Preliminaries, message=FALSE, warning=FALSE, include=FALSE}
 rm(list = ls())
@@ -112,11 +112,11 @@ ladder.tbl = ladder.raw %>%
   select(-change.aggregate.score, - played.round)
 ```
 
-## Determining optimal exponent ($k$)
+## A special $k$ for a special sport: determining an optimal exponent 
 
-In theory, the optimal value for $k$ is one that yields predictions closest to actual win percentage. In baseball, optimal values for $k$ have ranged anywhere between 1 and 2 depending on the source. Conversely, this number tends to be higher in basketball, somewhere closer to 15. This differential is said to reflect "chance" playing a greater role in baseball relatively to basketball.
+In theory, the optimal value for $k$ is one that yields predictions closest to actual win percentage. In baseball, optimal values for $k$ have ranged anywhere between 1 and 2 depending on the source. Conversely, this number tends to be higher in basketball, somewhere closer to 15. This differential is said to reflect "chance" playing a greater role in baseball compared to basketball.
 
-For determining an optimal value for AFL, we take a simple approach of looping/iterating through our data with different combinations of $k$ calculating expected win percentage for teams in every season back to 1897. We then assess the results for each iteration of $k$ against actual win percentage utilising mean absolute error (MAE) and root mean squared error (RMSE) to measure accuracy, selecting a value which minimises the error. 
+For determining an optimal value for AFL, we take a simple approach of looping/iterating through season-ended data with different combinations of $k$ to allow us to compare expected wins for different values of $k$ against actual win percentage. We assess the accuracy of each iteration of $k$ using standard accuracy measures, namely mean absolute error (MAE) and root mean squared error (RMSE), with the view to minimise the size of errors.
 
 ```{r Pythagorean k-tester, include=FALSE}
 # Pythagorean k-tester
@@ -142,7 +142,7 @@ end.tester = Sys.time()
 end.tester-start.tester
 ```
 
-We plot and extract the results of our runs reporting the MAE/RMSE. We see that a $k$ of 3.9 minimises the MAE, while 3.89 minimises the RMSE. For our analysis and simplicity we utilise $k=3.9$ (MAE is generally more interpretable, and both magnitudes are almost identical). 
+The plot below illustrates the calculated MAE/RMSE for values of $k$ tested. We see that a $k$ of 3.9 minimises the MAE, while 3.89 minimises the RMSE. Given the close magnitude of both estimates, and the generally better interpretability, we rely on $k = 3.9$ for the remainder of this analysis. 
 
 ```{r Plot accuracy, message=FALSE, warning=FALSE}
 accuracy.tbl %>% 
@@ -168,9 +168,9 @@ optimal.k = accuracy.tbl %>%
   print()
 ```
 
-## Expectation correlates with actual outcomes
+## When expectation is reality (actuals)
 
-Having found our "optimal" $k$, we create a Pythagorean table with calculated expected wins and win percentage. The below table provides a snapshot of the 2022 season. 
+Having found our "optimal" $k$, we create a Pythagorean table and calculate expected wins and win percentage. The below table provides a snapshot of the 2022 season. 
 
 ```{r Pyth table, echo=FALSE, message=FALSE, warning=FALSE}
 pyth.tbl = ladder.tbl %>% 
@@ -185,7 +185,7 @@ pyth.tbl = ladder.tbl %>%
   ungroup() %>% 
   mutate(ladder.diff = ladder.position-pyth.ladder.position)
 
-print(pyth.tbl %>% 
+kable(pyth.tbl %>% 
         filter(season == 2022) %>% 
         arrange(ladder.position) %>% 
         select(team, ladder.position, actual.win.pct, pyth.win.pct, actual.wins, pyth.wins) %>% 
