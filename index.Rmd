@@ -507,6 +507,7 @@ kbl(performance.change.tbl %>%
 ```
 
 
+
 ```{r Ladder change win diff, echo = F, message = F, warning = F}
 performance.change.tbl %>% 
   filter(season == 2021) %>% 
@@ -527,10 +528,11 @@ performance.change.tbl %>%
        x = "Win differential, 2021",
        y = "Change in ladder position (2021 to 2022)")+
   theme(legend.position = "none")+
-  geom_text(data = data.frame(x = c(-6, 2.25, -6, 2.25),
+  geom_text(data = data.frame(x = c(-2.5, 1.5, -2.5, 1.5),
                               y = c(15, 15, -15, -15),
                               label = c("Under-performed, improved next year", 
                                         "Over-performed, improved next year", 
                                         "Under-performed, deteriorated next year", 
                                         "Over-performed, deteriorated next year")),
-            mapping = aes(x = x, y = y, label = label)
+            mapping = aes(x = x, y = y, label = label),
+            size = 2.5, hjust = 0L, inherit.aes = FALSE)
